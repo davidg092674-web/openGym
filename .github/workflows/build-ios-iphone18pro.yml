@@ -1,0 +1,61 @@
+name: openGym iPhone 18 Pro - unsigned IPA
+
+# Manually start on your own GitHub fork.
+# The resulting IPA is NOT signed: personal Apple ID signing is needed to install it.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: 'frontend/package-lock.json'
+      - name: Prepare iPhone 18 Pro target and native metadata
+        run: python3 .github/scripts/prepare_iphone18pro.py --root .
+      - name: Install frontend dependencies
+        run: npm ci --prefix frontend
+      - name: Build original openGym in mobile mode and synchronize Capacitor
+        working-directory: frontend
+        run: npm run build:mobile
+      - name: Install CocoaPods
+        working-directory: frontend/ios/App
+        run: pod install
+      - name: Compile physical-iPhone build (without signing)
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -workspace frontend/ios/App/App.xcworkspace \
+            -scheme App \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/openGymDerived" \
+            CODE_SIGNING_ALLOWED=NO \
+            build 2>&1 | tee "$RUNNER_TEMP/opengym-build.log" | tail -n 120
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$RUNNER_TEMP/openGymDerived/Build/Products/Release-iphoneos/App.app"
+          test -d "$APP"
+          mkdir -p "$RUNNER_TEMP/ipa/Payload" release
+          ditto "$APP" "$RUNNER_TEMP/ipa/Payload/App.app"
+          (cd "$RUNNER_TEMP/ipa" && zip -qry "$GITHUB_WORKSPACE/release/openGym-iPhone18Pro-unsigned.ipa" Payload)
+          shasum -a 256 release/*.ipa > release/SHA256.txt
+      - name: Deliver IPA as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openGym-iPhone18Pro-unsigned-IPA
+          path: release/*
+          if-no-files-found: error
+          retention-days: 7
